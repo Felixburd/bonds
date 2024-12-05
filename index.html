@@ -631,11 +631,14 @@
       BURST_INTERVAL: 15000  // Energy burst every 15 seconds
     };
 
-    // Add wave management variables after the frameCount variable
+    // First, make sure frameCount is declared before the wave variables
+    let frameCount = 0;
+
+    // Add these wave management variables after frameCount
     let waveStartTime = Date.now();
     let lastBurstTime = Date.now();
 
-    // Replace the existing animate() function with this updated version
+    // Make sure the animate function is properly defined
     function animate() {
       frameCount++;
       const currentTime = Date.now();
@@ -645,6 +648,21 @@
       if (currentTime - lastBurstTime > WAVE_CONSTANTS.BURST_INTERVAL) {
         addEnergyBurst();
         lastBurstTime = currentTime;
+      }
+
+      // Clear and update spatial grid first
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      spatialGrid.clear();
+      
+      // Update spatial grid
+      for (let particle of particles) {
+        spatialGrid.insert(particle);
+      }
+
+      // Update and draw particles
+      for (let particle of particles) {
+        particle.update(frameCount);
+        particle.draw();
       }
 
       // Handle wave transitions
@@ -682,49 +700,16 @@
         }
       }
 
-      // Clear and update spatial grid
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      spatialGrid.clear();
-      for (let particle of particles) {
-        spatialGrid.insert(particle);
-      }
-
-      // Update and draw particles
-      for (let particle of particles) {
-        particle.update(frameCount);
-        particle.draw();
-      }
-
       requestAnimationFrame(animate);
     }
 
-    // Replace the existing addEnergyBurst() function with this enhanced version
-    function addEnergyBurst() {
-      const burstCount = Math.floor(Math.random() * 3) + 1; // 1-3 bursts
-      
-      for (let i = 0; i < burstCount; i++) {
-        const burstX = Math.random() * canvas.width;
-        const burstY = Math.random() * canvas.height;
-        const burstRadius = Math.random() * 100 + 50;
-        const energyAmount = Math.random() * 400 + 200;
+    // Make sure to select an initial theme before creating particles
+    selectRandomTheme();
 
-        for (let particle of particles) {
-          const dx = particle.x - burstX;
-          const dy = particle.y - burstY;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          if (distance < burstRadius) {
-            particle.energy += energyAmount * (1 - distance / burstRadius);
-            // Add some velocity away from burst center
-            const force = (1 - distance / burstRadius) * 2;
-            particle.vx += (dx / distance) * force;
-            particle.vy += (dy / distance) * force;
-          }
-        }
-      }
-    }
+    // Initialize with a smaller number of particles first
+    initializeParticles(1000);
 
-    // Update the initialization to use the new constants
-    initializeParticles(WAVE_CONSTANTS.MAX_PARTICLES);
+    // Start the animation
     animate();
 
     // Add window resize handler
