@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Cellular Ecosystem</title>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+    }
+    canvas {
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 8px;
+      font-family: Arial, sans-serif;
+      z-index: 1;
+    }
+    button {
+      background: #333;
+      color: white;
+      border: none;
+      padding: 10px;
+      margin: 5px 0;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+    button:hover {
+      background: #555;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="ecosystemCanvas"></canvas>
+  <div id="controls">
+    <button id="addEnergyBurst">Add Energy Burst</button>
+    <button id="reset">Reset</button>
+  </div>
+  <script>
+    // Setup canvas
+    const canvas = document.getElementById("ecosystemCanvas");
+    const ctx = canvas.getContext("2d");
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    // Store particles
+    const particles = [];
+    let isDragging = false;
+    let lastMouse = { x: 0, y: 0 };
+
+    // Particle states
+    const STATES = ["static", "dynamic", "aggressive", "cluster"];
+
+    // After the STATES constant, add these new constants
+    const BOND_DISTANCE = 40;
+    const MAX_BOND_DISTANCE = BOND_DISTANCE * 1.5; // Maximum distance before breaking bonds
+    const MAX_BONDS = 4;      // Increased from 3 to 4
+    const ATTRACTION_DISTANCE = 150;  // Increased from 100 to 150
+
+    // After the existing ones, add these new constants
+    const STATE_DIMENSIONS = {
+      energy: { min: 0, max: 200 },
+      activity: { min: 0, max: 1 },    // Based on velocity
+      bondCount: { min: 0, max: MAX_BONDS },
+      age: { min: 0, max: 1000 }       // Particle lifetime
+    };
+
+    // Add these constants after the existing ones
+    const CLUSTER_CONSTANTS = {
+      CLUSTER_RADIUS: 150,
+      CLUSTER_FORCE: 0.004,         // Reduced from 0.008
+      CLUSTER_COHESION: 0.015,
+      MIN_CLUSTER_SIZE: 2,
+      MAX_CLUSTER_SIZE: 80,
+      REPULSION_RADIUS: 40,         // Increased from 30
+      DISPERSION_FORCE: 0.02,       // Increased from 0.015
+      MAX_VELOCITY: 1.2,
+      BOUNDARY_FORCE: 0.12,         // Reduced from 0.15 for softer boundaries
+      BOUNDARY_DISTANCE: 120,       // Increased from 100 for wider boundary effect
+      BOUNDARY_ELASTICITY: 0.92,    // New constant for boundary bounce elasticity
+      BOUNDARY_CURVE: 0.3          // New constant for boundary curve effect
+    };
+
+    // Add these constants after the existing ones
+    const COLOR_THEMES = [
+      // Ocean theme
+      {
+        static: { r: 100, g: 100, b: 255 },
+        dynamic: { r: 0, g: 255, b: 255 },
+        aggressive: { r: 0, g: 150, b: 255 },
+        cluster: { r: 150, g: 200, b: 255 }
+      },
+      // Forest theme
+      {
+        static: { r: 50, g: 150, b: 50 },
+        dynamic: { r: 100, g: 255, b: 100 },
+        aggressive: { r: 200, g: 255, b: 50 },
+        cluster: { r: 150, g: 200, b: 100 }
+      },
+      // Volcanic theme
+      {
+        static: { r: 255, g: 100, b: 50 },
+        dynamic: { r: 255, g: 200, b: 50 },
+        aggressive: { r: 255, g: 50, b: 50 },
+        cluster: { r: 255, g: 150, b: 100 }
+      },
+      // Neon theme
+      {
+        static: { r: 255, g: 0, b: 255 },
+        dynamic: { r: 0, g: 255, b: 255 },
+        aggressive: { r: 255, g: 255, b: 0 },
+        cluster: { r: 200, g: 200, b: 255 }
+      }
+    ];
+
+    let currentTheme = null;
+
+    // Add this function to select a random theme
+    function selectRandomTheme() {
+      currentTheme = COLOR_THEMES[Math.floor(Math.random() * COLOR_THEMES.length)];
+    }
+
+    // Add these optimization constants after existing constants
+    const OPTIMIZATION = {
+      SPATIAL_GRID_SIZE: 50,  // Size of each grid cell
+      UPDATE_SKIP_FRAMES: 3,  // Update heavy calculations every N frames
+      MAX_NEIGHBORS: 15       // Maximum neighbors to consider for interactions
+    };
+
+    // Add this spatial partitioning system
+    class SpatialGrid {
+      constructor(width, height, cellSize) {
+        this.cellSize = cellSize;
+        this.cols = Math.ceil(width / cellSize);
+        this.rows = Math.ceil(height / cellSize);
+        this.grid = new Array(this.cols * this.rows).fill().map(() => []);
+      }
+
+      clear() {
+        for (let i = 0; i < this.grid.length; i++) {
+          this.grid[i].length = 0;
+        }
+      }
+
+      insert(particle) {
+        const cell = this.getCellIndex(particle.x, particle.y);
+        if (cell >= 0 && cell < this.grid.length) {
+          this.grid[cell].push(particle);
+        }
+      }
+
+      getCellIndex(x, y) {
+        const col = Math.floor(x / this.cellSize);
+        const row = Math.floor(y / this.cellSize);
+        if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) return -1;
+        return row * this.cols + col;
+      }
+
+      getNearbyParticles(x, y, radius) {
+        const nearby = [];
+        const cellRadius = Math.ceil(radius / this.cellSize);
+        const centerCell = this.getCellIndex(x, y);
+        if (centerCell === -1) return nearby;
+
+        const centerCol = centerCell % this.cols;
+        const centerRow = Math.floor(centerCell / this.cols);
+
+        for (let offY = -cellRadius; offY <= cellRadius; offY++) {
+          for (let offX = -cellRadius; offX <= cellRadius; offX++) {
+            const col = centerCol + offX;
+            const row = centerRow + offY;
+            if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) continue;
+            
+            const cell = row * this.cols + col;
+            nearby.push(...this.grid[cell]);
+            
+            if (nearby.length > OPTIMIZATION.MAX_NEIGHBORS) break;
+          }
+          if (nearby.length > OPTIMIZATION.MAX_NEIGHBORS) break;
+        }
+
+        return nearby;
+      }
+    }
+
+    // Add spatial grid to global scope
+    const spatialGrid = new SpatialGrid(
+      canvas.width, 
+      canvas.height, 
+      OPTIMIZATION.SPATIAL_GRID_SIZE
+    );
+
+    // Particle class
+    class Particle {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.vx = Math.random() * 0.2 - 0.1;
+        this.vy = Math.random() * 0.2 - 0.1;
+        this.size = Math.random() * 3 + 3;
+        this.energy = Math.random() * 120 + 80;      // Adjusted energy range for more active particles
+        this.state = STATES[Math.floor(Math.random() * STATES.length)];
+        this.bonds = new Set();
+        this.bondStrength = Math.random() * 0.5 + 0.5;
+        this.attractionForce = Math.random() * 0.2 - 0.1;
+        this.age = 0;
+        this.lastStateVector = null;
+        
+        // Initialize colors properly based on the current theme
+        const initialColor = currentTheme[this.state];
+        this.currentColor = {
+          r: initialColor.r,
+          g: initialColor.g,
+          b: initialColor.b,
+          a: 0.7
+        };
+        this.targetColor = { ...this.currentColor };
+        
+        // Set initial color
+        this.color = this.updateColor();
+
+        this.clusterGroup = null;  // Track which cluster this particle belongs to
+        this.clusterCenter = { x: 0, y: 0 };  // Track center of mass for cluster
+        this.bondProbability = Math.random() * 0.3;  // Add probability for bond formation
+      }
+
+      calculateStateVector() {
+        // Calculate normalized values for each dimension
+        const energyNorm = Math.min(1, Math.max(0, this.energy / STATE_DIMENSIONS.energy.max));
+        
+        // Activity based on velocity
+        const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+        const activityNorm = Math.min(1, speed / 2); // 2 is max speed
+        
+        // Bond ratio
+        const bondNorm = this.bonds.size / MAX_BONDS;
+        
+        // Age factor
+        const ageNorm = Math.min(1, this.age / STATE_DIMENSIONS.age.max);
+
+        return {
+          energy: energyNorm,
+          activity: activityNorm,
+          bonds: bondNorm,
+          age: ageNorm
+        };
+      }
+
+      updateColor() {
+        if (!currentTheme || !currentTheme[this.state]) {
+          return 'rgba(255, 255, 255, 0.7)'; // Fallback color if theme isn't loaded
+        }
+
+        const stateVector = this.calculateStateVector();
+        
+        // Calculate target color based on state vector
+        this.targetColor = {
+          r: Math.floor(
+            currentTheme[this.state].r * Math.max(0.1, stateVector.energy * (1 + 0.2 * stateVector.activity))
+          ),
+          g: Math.floor(
+            currentTheme[this.state].g * Math.max(0.1, (0.5 + 0.5 * stateVector.bonds))
+          ),
+          b: Math.floor(
+            currentTheme[this.state].b * Math.max(0.1, (0.7 + 0.3 * stateVector.age))
+          ),
+          a: Math.max(0.3, 0.3 + 0.4 * stateVector.energy) // Ensure minimum visibility
+        };
+
+        // Smooth color transition
+        const transitionSpeed = 0.1;
+        this.currentColor.r += (this.targetColor.r - this.currentColor.r) * transitionSpeed;
+        this.currentColor.g += (this.targetColor.g - this.currentColor.g) * transitionSpeed;
+        this.currentColor.b += (this.targetColor.b - this.currentColor.b) * transitionSpeed;
+        this.currentColor.a += (this.targetColor.a - this.currentColor.a) * transitionSpeed;
+
+        // Ensure color values are valid
+        return `rgba(${Math.max(0, Math.min(255, Math.floor(this.currentColor.r)))}, 
+                     ${Math.max(0, Math.min(255, Math.floor(this.currentColor.g)))}, 
+                     ${Math.max(0, Math.min(255, Math.floor(this.currentColor.b)))}, 
+                     ${Math.max(0, Math.min(1, this.currentColor.a))})`;
+      }
+
+      // Update particle based on state
+      update(frameCount) {
+        // Basic movement
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Elastic boundary handling with curve effect
+        const bf = CLUSTER_CONSTANTS.BOUNDARY_FORCE;
+        const bd = CLUSTER_CONSTANTS.BOUNDARY_DISTANCE;
+        const be = CLUSTER_CONSTANTS.BOUNDARY_ELASTICITY;
+        const bc = CLUSTER_CONSTANTS.BOUNDARY_CURVE;
+        
+        // Calculate distance from boundaries
+        const distLeft = this.x;
+        const distRight = canvas.width - this.x;
+        const distTop = this.y;
+        const distBottom = canvas.height - this.y;
+
+        // Horizontal boundaries
+        if (distLeft < bd) {
+          // Left boundary
+          const force = Math.exp(-distLeft / bd) * bf;
+          this.vx += force;
+          // Add curved deflection
+          this.vy += (Math.random() - 0.5) * force * bc;
+          // Apply elasticity
+          if (this.x < 0) {
+            this.x = 0;
+            this.vx = Math.abs(this.vx) * be;
+          }
+        }
+        if (distRight < bd) {
+          // Right boundary
+          const force = Math.exp(-distRight / bd) * bf;
+          this.vx -= force;
+          // Add curved deflection
+          this.vy += (Math.random() - 0.5) * force * bc;
+          // Apply elasticity
+          if (this.x > canvas.width) {
+            this.x = canvas.width;
+            this.vx = -Math.abs(this.vx) * be;
+          }
+        }
+
+        // Vertical boundaries
+        if (distTop < bd) {
+          // Top boundary
+          const force = Math.exp(-distTop / bd) * bf;
+          this.vy += force;
+          // Add curved deflection
+          this.vx += (Math.random() - 0.5) * force * bc;
+          // Apply elasticity
+          if (this.y < 0) {
+            this.y = 0;
+            this.vy = Math.abs(this.vy) * be;
+          }
+        }
+        if (distBottom < bd) {
+          // Bottom boundary
+          const force = Math.exp(-distBottom / bd) * bf;
+          this.vy -= force;
+          // Add curved deflection
+          this.vx += (Math.random() - 0.5) * force * bc;
+          // Apply elasticity
+          if (this.y > canvas.height) {
+            this.y = canvas.height;
+            this.vy = -Math.abs(this.vy) * be;
+          }
+        }
+
+        // Soft boundary enforcement
+        if (this.x < -10) this.x = -10;
+        if (this.x > canvas.width + 10) this.x = canvas.width + 10;
+        if (this.y < -10) this.y = -10;
+        if (this.y > canvas.height + 10) this.y = canvas.height + 10;
+
+        // Rest of the update logic...
+        if (frameCount % OPTIMIZATION.UPDATE_SKIP_FRAMES === 0) {
+          if (this.state === "static") {
+            this.vx *= 0.95;
+            this.vy *= 0.95;
+            this.energy -= 0.02;  // Reduced energy loss
+          } else {
+            // Add small random movements with better distribution
+            if (Math.random() < 0.1) {
+              const angle = Math.random() * Math.PI * 2;
+              const force = 0.02;
+              this.vx += Math.cos(angle) * force;
+              this.vy += Math.sin(angle) * force;
+            }
+            
+            // Slowly regenerate energy for moving particles
+            if (this.energy < 150) {
+              this.energy += 0.01;
+            }
+          }
+
+          // Update state based on energy with adjusted thresholds
+          if (this.energy <= 15) {
+            this.state = "static";
+          } else if (this.energy > 180) {
+            this.state = "aggressive";
+          } else if (this.energy > 60 && this.energy < 160) {  // Wider range for cluster state
+            if (Math.random() < 0.03) {  // Increased from 0.02
+              this.state = "cluster";
+            }
+          }
+
+          // Occasionally try to form bonds
+          if (Math.random() < 0.01 && this.bonds.size < MAX_BONDS) {
+            this.updateBonds();
+          }
+
+          // Add dispersion for high-velocity particles
+          const speed = Math.hypot(this.vx, this.vy);
+          if (speed > CLUSTER_CONSTANTS.MAX_VELOCITY) {
+            const angle = Math.atan2(this.vy, this.vx) + Math.PI;
+            const dispersionForce = (speed - CLUSTER_CONSTANTS.MAX_VELOCITY) * CLUSTER_CONSTANTS.DISPERSION_FORCE;
+            this.vx += Math.cos(angle) * dispersionForce;
+            this.vy += Math.sin(angle) * dispersionForce;
+          }
+        }
+
+        // Velocity limiting with smooth damping
+        const speed = Math.hypot(this.vx, this.vy);
+        if (speed > CLUSTER_CONSTANTS.MAX_VELOCITY) {
+          const dampingFactor = 1 - Math.min(1, (speed - CLUSTER_CONSTANTS.MAX_VELOCITY) / speed);
+          this.vx *= dampingFactor;
+          this.vy *= dampingFactor;
+        }
+
+        // Update color and cluster behavior
+        this.color = this.updateColor();
+        this.updateClusterBehavior();
+      }
+
+      // Draw particle
+      draw() {
+        // Draw bonds with theme-based colors
+        for (let bonded of this.bonds) {
+          const gradient = ctx.createLinearGradient(this.x, this.y, bonded.x, bonded.y);
+          const color1 = this.getColor();
+          const color2 = bonded.getColor();
+          gradient.addColorStop(0, color1.replace('0.7', `${this.bondStrength * 0.5}`));
+          gradient.addColorStop(1, color2.replace('0.7', `${this.bondStrength * 0.5}`));
+          
+          ctx.beginPath();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = gradient;
+          ctx.moveTo(this.x, this.y);
+          ctx.lineTo(bonded.x, bonded.y);
+          ctx.stroke();
+        }
+
+        // Draw particle
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.getColor();
+        ctx.fill();
+      }
+
+      // Check if another particle is nearby
+      isNearby(other) {
+        const dx = this.x - other.x;
+        const dy = this.y - other.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < 50;
+      }
+
+      // Get color based on state
+      getColor() {
+        return this.updateColor();
+      }
+
+      // Add this new method to handle particle bonds
+      updateBonds() {
+        // Remove broken bonds (too far apart)
+        for (let bonded of this.bonds) {
+          const distance = this.getDistanceTo(bonded);
+          if (distance > MAX_BOND_DISTANCE) {
+            this.bonds.delete(bonded);
+            bonded.bonds.delete(this);
+          }
+        }
+
+        // Try to form new bonds
+        if (this.bonds.size < MAX_BONDS && this.state !== "static") {
+          const nearbyParticles = spatialGrid.getNearbyParticles(
+            this.x, 
+            this.y, 
+            BOND_DISTANCE
+          );
+          
+          for (let other of nearbyParticles) {
+            if (other !== this && 
+                other.bonds.size < MAX_BONDS && 
+                !this.bonds.has(other) &&
+                this.canBond(other)) {
+              const distance = this.getDistanceTo(other);
+              if (distance < BOND_DISTANCE) {
+                this.bonds.add(other);
+                other.bonds.add(this);
+              }
+            }
+          }
+        }
+      }
+
+      // Add helper method to calculate distance
+      getDistanceTo(other) {
+        const dx = this.x - other.x;
+        const dy = this.y - other.y;
+        return Math.sqrt(dx * dx + dy * dy);
+      }
+
+      // Add method to check if particles can bond
+      canBond(other) {
+        // Static particles can't form new bonds
+        if (this.state === "static" || other.state === "static") return false;
+        
+        // Rare random bonding chance based on particle properties
+        if (Math.random() < this.bondProbability * other.bondProbability) {
+          // Higher chance to bond if particles are in similar states
+          if (this.state === other.state) return true;
+          
+          // Lower chance for different states
+          if (Math.random() < 0.3) return true;
+        }
+        
+        return false;
+      }
+
+      // Add new method for cluster behavior
+      updateClusterBehavior() {
+        if (this.state !== "cluster") return;
+
+        const nearbyParticles = spatialGrid.getNearbyParticles(
+          this.x, 
+          this.y, 
+          CLUSTER_CONSTANTS.CLUSTER_RADIUS
+        ).filter(p => p !== this);
+
+        if (nearbyParticles.length >= CLUSTER_CONSTANTS.MIN_CLUSTER_SIZE) {
+          let centerX = 0, centerY = 0;
+          let totalWeight = 0;
+          const count = Math.min(nearbyParticles.length, OPTIMIZATION.MAX_NEIGHBORS);
+          
+          // Enhanced weighting for cluster formation
+          for (let i = 0; i < count; i++) {
+            const p = nearbyParticles[i];
+            const dist = Math.hypot(p.x - this.x, p.y - this.y);
+            const distanceWeight = Math.pow(1 - (dist / CLUSTER_CONSTANTS.CLUSTER_RADIUS), 2); // Quadratic falloff
+            const stateWeight = p.state === "cluster" ? 1.5 : 1.0;  // Increased from 1.2 to 1.5
+            const bondWeight = this.bonds.has(p) ? 1.3 : 1.0;       // Additional weight for bonded particles
+            const weight = distanceWeight * stateWeight * bondWeight;
+            
+            centerX += p.x * weight;
+            centerY += p.y * weight;
+            totalWeight += weight;
+          }
+          
+          if (totalWeight > 0) {
+            this.clusterCenter.x = centerX / totalWeight;
+            this.clusterCenter.y = centerY / totalWeight;
+
+            const dx = this.clusterCenter.x - this.x;
+            const dy = this.clusterCenter.y - this.y;
+            const dist = Math.hypot(dx, dy);
+            
+            if (dist > 0) {
+              // Smoother force application
+              const normalizedDx = dx / dist;
+              const normalizedDy = dy / dist;
+              const forceMagnitude = CLUSTER_CONSTANTS.CLUSTER_FORCE * 
+                Math.min(1, dist / CLUSTER_CONSTANTS.CLUSTER_RADIUS);
+
+              this.vx += normalizedDx * forceMagnitude;
+              this.vy += normalizedDy * forceMagnitude;
+
+              // Enhanced repulsion when too close
+              if (dist < CLUSTER_CONSTANTS.REPULSION_RADIUS) {
+                const repulsion = Math.pow(1 - dist / CLUSTER_CONSTANTS.REPULSION_RADIUS, 2);
+                this.vx -= normalizedDx * repulsion * CLUSTER_CONSTANTS.DISPERSION_FORCE;
+                this.vy -= normalizedDy * repulsion * CLUSTER_CONSTANTS.DISPERSION_FORCE;
+              }
+            }
+          }
+        }
+
+        // Slightly reduced random movement
+        if (Math.random() < 0.02) {  // Reduced from 0.03
+          const angle = Math.random() * Math.PI * 2;
+          const randomForce = Math.random() * 0.008;  // Reduced from 0.01
+          this.vx += Math.cos(angle) * randomForce;
+          this.vy += Math.sin(angle) * randomForce;
+        }
+      }
+    }
+
+    // Initialize particles
+    function initializeParticles(count) {
+      if (!currentTheme) {
+        selectRandomTheme(); // Make sure we have a theme
+      }
+      particles.length = 0;
+      for (let i = 0; i < count; i++) {
+        particles.push(new Particle(
+          Math.random() * canvas.width,
+          Math.random() * canvas.height
+        ));
+      }
+    }
+
+    // Add an energy burst
+    function addEnergyBurst() {
+      const burstX = Math.random() * canvas.width;
+      const burstY = Math.random() * canvas.height;
+      for (let particle of particles) {
+        const dx = particle.x - burstX;
+        const dy = particle.y - burstY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < 100) {
+          particle.energy += 500; // Boost energy for nearby particles
+        }
+      }
+    }
+
+    // Handle drag interaction
+    function handleDrag(x, y) {
+      const dragRadius = 100;
+      const dragForce = 0.5;
+      const boundaryForceMultiplier = 1.2; // Increased force near boundaries
+      
+      for (let particle of particles) {
+        const dx = particle.x - x;
+        const dy = particle.y - y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < dragRadius) {
+          // Calculate distance from boundaries
+          const distToBoundary = Math.min(
+            particle.x,
+            canvas.width - particle.x,
+            particle.y,
+            canvas.height - particle.y
+          );
+          
+          // Increase force near boundaries
+          const boundaryMod = distToBoundary < CLUSTER_CONSTANTS.BOUNDARY_DISTANCE 
+            ? boundaryForceMultiplier 
+            : 1;
+
+          // Normalized directional force with boundary consideration
+          const force = (dragRadius - distance) / dragRadius * dragForce * boundaryMod;
+          particle.vx += (dx / distance) * force;
+          particle.vy += (dy / distance) * force;
+          particle.energy += 0.5;
+        }
+      }
+
+      // Draw energy trail
+      ctx.beginPath();
+      ctx.arc(x, y, dragRadius, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 255, 0, 0.2)";
+      ctx.fill();
+    }
+
+    // Animation loop
+    let frameCount = 0;
+
+    function animate() {
+      frameCount++;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Update spatial grid
+      spatialGrid.clear();
+      for (let particle of particles) {
+        spatialGrid.insert(particle);
+      }
+
+      // Update and draw particles
+      for (let particle of particles) {
+        particle.update(frameCount);
+        particle.draw();
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // Event listeners
+    canvas.addEventListener("mousedown", (e) => {
+      isDragging = true;
+      lastMouse = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener("mousemove", (e) => {
+      if (isDragging) handleDrag(e.clientX, e.clientY);
+    });
+    canvas.addEventListener("mouseup", () => {
+      isDragging = false;
+    });
+
+    canvas.addEventListener("touchstart", (e) => {
+      isDragging = true;
+      const touch = e.touches[0];
+      lastMouse = { x: touch.clientX, y: touch.clientY };
+    });
+    canvas.addEventListener("touchmove", (e) => {
+      if (isDragging) {
+        const touch = e.touches[0];
+        handleDrag(touch.clientX, touch.clientY);
+      }
+    });
+    canvas.addEventListener("touchend", () => {
+      isDragging = false;
+    });
+
+    document.getElementById("addEnergyBurst").addEventListener("click", addEnergyBurst);
+    document.getElementById("reset").addEventListener("click", () => initializeParticles(500));
+
+    // Start simulation
+    initializeParticles(3000); // Changed from 200 to 3000
+    animate();
+
+    // Add window resize handler
+    function handleResize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      
+      // Update spatial grid with new dimensions
+      spatialGrid = new SpatialGrid(
+        canvas.width, 
+        canvas.height, 
+        OPTIMIZATION.SPATIAL_GRID_SIZE
+      );
+
+      // Ensure particles are within new bounds
+      for (let particle of particles) {
+        particle.x = Math.min(Math.max(particle.x, 0), canvas.width);
+        particle.y = Math.min(Math.max(particle.y, 0), canvas.height);
+      }
+    }
+
+    // Call handleResize initially to ensure correct sizing
+    handleResize();
+
+    // Add resize event listener
+    window.addEventListener('resize', handleResize);
+  </script>
+</body>
+</html>
