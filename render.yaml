@@ -1,12 +1,8 @@
 services:
   - type: static
     name: cellular-ecosystem
-    buildCommand: echo "Static site - no build needed"
-    publishPath: .
+    buildCommand: echo "No build required"
     staticPublishPath: .
-    envVars:
-      - key: NODE_VERSION
-        value: 18
     headers:
       - path: /*
         name: Cache-Control
