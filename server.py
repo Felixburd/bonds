@@ -1,18 +1,16 @@
-from flask import Flask, send_from_directory
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 import os
 
-app = Flask(__name__)
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=".", **kwargs)
 
-# Get the directory containing server.py
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def run(server_class=HTTPServer, handler_class=Handler, port=8000):
+    server_address = ('', port)
+    httpd = server_class(server_address, handler_class)
+    print(f"Serving on port {port}")
+    httpd.serve_forever()
 
-@app.route('/')
-def serve_index():
-    return send_from_directory(BASE_DIR, 'index.html')
-
-@app.route('/<path:path>')
-def serve_files(path):
-    return send_from_directory(BASE_DIR, path)
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=True) 
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    run(port=port) 
