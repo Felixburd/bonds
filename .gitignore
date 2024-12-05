@@ -8,5 +8,13 @@ Thumbs.db
 *.swp
 *.swo
 
-# Logs
-*.log 
+# Logs and temp files
+*.log
+__pycache__/
+*.pyc
+.env
+
+# Build artifacts
+dist/
+build/
+node_modules/
